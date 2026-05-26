@@ -9,7 +9,7 @@ import pytest
 import torch
 from inspect import signature
 
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, SequentialSampler
 
 from deepforest import get_data
 from deepforest.datasets.training import BalancedDetectionBatchSampler, BoxDataset
@@ -150,20 +150,23 @@ def test_balanced_sampler_exposes_lightning_arguments():
     assert "drop_last" in params
 
 
-def test_balanced_sampler_uses_injected_positive_sampler():
-    """Custom ``sampler`` controls which positive images appear this epoch."""
-    positive_indices = [10, 11, 12, 13]
-    sampler = BalancedDetectionBatchSampler(
-        positive_indices=positive_indices,
-        negative_indices=[20, 21, 22],
+def test_balanced_sampler_survives_lightning_oversized_sampler(tmp_path):
+    """Lightning replaces ``sampler`` with one sized to ``len(dataset)``; indexing must not use it."""
+    csv_path, root_dir = _make_mixed_csv(tmp_path, n_positive=3, n_negative=5)
+    ds = BoxDataset(csv_file=csv_path, root_dir=root_dir, label_dict={"Tree": 0})
+    bs = BalancedDetectionBatchSampler(
+        positive_indices=ds.positive_indices,
+        negative_indices=ds.negative_indices,
         batch_size=4,
         positive_batch_fraction=0.5,
-        sampler=[0, 2],
+        generator=torch.Generator().manual_seed(42),
     )
-    batches = list(sampler)
-    assert len(batches) == 1
-    assert 10 in batches[0]
-    assert 12 in batches[0]
+    bs.sampler = SequentialSampler(range(len(ds)))
+    batches = list(bs)
+    assert batches
+    positive_set = set(ds.positive_indices)
+    for batch in batches:
+        assert sum(i in positive_set for i in batch) == bs.n_positive
 
 
 def test_balanced_sampler_requires_both_pools():
