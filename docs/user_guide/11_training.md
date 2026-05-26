@@ -251,6 +251,8 @@ m.config.train.positive_batch_fraction = 0.75
 
 Or from the command line: `train.positive_batch_fraction=0.75`. Leave unset (`null`) to keep the default uniform shuffle.
 
+With multiple devices, Lightning's injected sampler is keyed to the full dataset size, not the positive-only pool, so the balanced batch sampler **ignores** that sampler and shuffles positives internally. Typical multi-GPU setups should use `Trainer(use_distributed_sampler=False)` unless you shard positives yourself (otherwise each rank may see the full positive set).
+
 ### Model checkpoints
 
 Model checkpoints are the output of training. They represent the learned weights that can be distributed and used by anyone with DeepForest installed to perform prediction or fine-tuning. There are two main types of checkpoint that we work with:
