@@ -243,6 +243,16 @@ myimage.png, 0,0,0,0,"Tree"
 
 Excessive use of negative samples may have a negative impact on model performance, but when used sparingly, they can increase precision.
 
+When hard negatives greatly outnumber annotated images, uniform shuffling can put mostly empty frames in every batch and destabilize training. Set `train.positive_batch_fraction` (for example `0.75`) to fix how many images in each batch contain real annotations; the remainder are drawn at random from the negative pool. One training epoch then covers each annotated image once, while negatives are subsampled rather than fully repeated every epoch.
+
+```python
+m.config.train.positive_batch_fraction = 0.75
+```
+
+Or from the command line: `train.positive_batch_fraction=0.75`. Leave unset (`null`) to keep the default uniform shuffle.
+
+With multiple devices, Lightning's injected sampler is keyed to the full dataset size, not the positive-only pool, so the balanced batch sampler **ignores** that sampler and shuffles positives internally. Typical multi-GPU setups should use `Trainer(use_distributed_sampler=False)` unless you shard positives yourself (otherwise each rank may see the full positive set).
+
 ### Model checkpoints
 
 Model checkpoints are the output of training. They represent the learned weights that can be distributed and used by anyone with DeepForest installed to perform prediction or fine-tuning. There are two main types of checkpoint that we work with:
