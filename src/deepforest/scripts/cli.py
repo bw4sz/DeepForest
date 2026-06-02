@@ -7,7 +7,7 @@ from omegaconf import OmegaConf
 from deepforest.conf.schema import Config as StructuredConfig
 from deepforest.scripts.evaluate import evaluate
 from deepforest.scripts.predict import predict
-from deepforest.scripts.sam import sam3_polygons
+from deepforest.scripts.sam import sam2_polygons
 from deepforest.scripts.train import train
 
 
@@ -90,10 +90,10 @@ def main():
         help="Prediction mode: 'single' for single image, 'tile' for tiled image prediction, 'csv' for batch prediction from CSV file. Defaults to 'single'.",
     )
 
-    # SAM3 polygon post-processing subcommand
+    # SAM2 polygon post-processing subcommand
     sam_parser = subparsers.add_parser(
-        "sam3-polygons",
-        help="Convert DeepForest box/point predictions to polygons with SAM3",
+        "sam2-polygons",
+        help="Convert DeepForest box/point predictions to polygons with SAM2",
         epilog="Any remaining arguments <key>=<value> will be passed to Hydra to override the current config.",
     )
     sam_parser.add_argument(
@@ -105,9 +105,7 @@ def main():
         "--predictions-csv",
         help="Optional CSV of existing DeepForest predictions to convert to polygons",
     )
-    sam_parser.add_argument(
-        "-o", "--output", help="Path to save polygon predictions CSV"
-    )
+    sam_parser.add_argument("-o", "--output", help="Path to save polygon predictions CSV")
     sam_parser.add_argument(
         "--root-dir",
         help="Root directory containing images for CSV-based workflows",
@@ -122,40 +120,30 @@ def main():
         "--prompt-mode",
         choices=["auto", "box", "point"],
         default="auto",
-        help="Prompt type for SAM3; defaults to inferring from prediction geometry",
-    )
-    sam_parser.add_argument(
-        "--text-prompt",
-        default=None,
-        help="Optional SAM3 text prompt, e.g. 'individual tree crown'",
+        help="Prompt type for SAM2; defaults to inferring from prediction geometry",
     )
     sam_parser.add_argument(
         "--model-name",
-        default="facebook/sam3",
-        help="Hugging Face model id for SAM3",
-    )
-    sam_parser.add_argument(
-        "--hf-token",
-        default=None,
-        help="Optional Hugging Face token. Falls back to HF_TOKEN env var.",
-    )
-    sam_parser.add_argument(
-        "--score-threshold",
-        type=float,
-        default=0.5,
-        help="Score threshold for SAM3 post-processing",
+        default="facebook/sam2.1-hiera-small",
+        help="Hugging Face model id for SAM2",
     )
     sam_parser.add_argument(
         "--mask-threshold",
         type=float,
         default=0.5,
-        help="Mask threshold for SAM3 post-processing",
+        help="Mask threshold for binarizing SAM2 outputs",
     )
     sam_parser.add_argument(
-        "--point-box-size",
+        "--iou-threshold",
         type=float,
-        default=12.0,
-        help="Point prompt box size in pixels for point geometry workflows",
+        default=0.5,
+        help="Minimum SAM2 IoU score to keep a polygon",
+    )
+    sam_parser.add_argument(
+        "--prompt-batch-size",
+        type=int,
+        default=32,
+        help="Maximum prompts per SAM2 forward pass",
     )
 
     # Evaluate subcommand
@@ -211,8 +199,8 @@ def main():
             root_dir=args.root_dir,
             mode=args.mode,
         )
-    elif args.command == "sam3-polygons":
-        sam3_polygons(
+    elif args.command == "sam2-polygons":
+        sam2_polygons(
             cfg,
             input_path=args.input,
             predictions_csv=args.predictions_csv,
@@ -220,12 +208,10 @@ def main():
             root_dir=args.root_dir,
             mode=args.mode,
             prompt_mode=args.prompt_mode,
-            text_prompt=args.text_prompt,
             model_name=args.model_name,
-            hf_token=args.hf_token,
-            score_threshold=args.score_threshold,
             mask_threshold=args.mask_threshold,
-            point_box_size=args.point_box_size,
+            iou_threshold=args.iou_threshold,
+            prompt_batch_size=args.prompt_batch_size,
         )
     elif args.command == "train":
         res = train(

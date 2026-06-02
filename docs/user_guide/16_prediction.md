@@ -122,9 +122,9 @@ The image shows that the speed of the predict_tile function is related to the st
 The _predict_tile_ function is sensitive to _patch_size_, especially when using the prebuilt model on new data.
 We encourage users to experiment with various patch sizes. For 0.1m data, 400-800px per window is appropriate, but it will depend on the density of tree plots. For coarser resolution tiles, >800px patch sizes have been effective.
 
-## Convert points or boxes to polygons with SAM3
+## Convert points or boxes to polygons with SAM2
 
-DeepForest predictions from `predict_image` or `predict_tile` can be post-processed into polygons with SAM3. This is useful when you have point/box labels for training but want polygon outputs for downstream analysis. SAM3 supports optional text prompts and visual prompts in one call; see the [SAM3 paper](https://arxiv.org/abs/2511.16719) and [model card](https://huggingface.co/facebook/sam3) for details.
+DeepForest predictions from `predict_image` or `predict_tile` can be post-processed into polygons with SAM2. This workflow was originally contributed by Josh Veitch-Michaelis in [PR #1158](https://github.com/weecology/DeepForest/pull/1158) for [issue #460](https://github.com/weecology/DeepForest/issues/460). It is useful when you have point or box labels for training but want polygon outputs for downstream analysis. Each detection is segmented independently using box or point prompts; see the [SAM2 paper](https://arxiv.org/abs/2408.00714) and [model card](https://huggingface.co/facebook/sam2.1-hiera-small) for details.
 
 ```python
 from deepforest import main, get_data
@@ -136,20 +136,24 @@ model.load_model(model_name="weecology/deepforest-tree", revision="main")
 tile_path = get_data("OSBS_029.tif")
 box_results = model.predict_tile(tile_path, patch_size=300, patch_overlap=0.25)
 
-# Step 2: convert prompts to polygons with SAM3
+# Step 2: convert prompts to polygons with SAM2 (one mask per detection)
 polygon_results = model.predict_polygons(
     results=box_results,
     path=tile_path,
     prompt_mode="auto",
-    text_prompt="individual tree crown",  # optional
-    hf_token="<your_hf_token>",           # or set HF_TOKEN env var
 )
 ```
 
-You can also run the same workflow from the CLI:
+Integrated CLI (run detection, then SAM2):
 
 ```bash
-deepforest sam3-polygons /path/to/image.tif --mode tile -o sam3_polygons.csv --hf-token $HF_TOKEN
+deepforest sam2-polygons /path/to/image.tif --mode tile -o sam2_polygons.csv
+```
+
+CSV-only workflow (predictions already saved; from PR #1158):
+
+```bash
+deepforest-sam predictions.csv --image-root /path/to/images -o predictions_polygons.csv --visualize
 ```
 
 ![](../../www/example_predictions_small.png)

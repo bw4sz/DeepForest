@@ -18,7 +18,7 @@ from torchmetrics.detection import IntersectionOverUnion, MeanAveragePrecision
 from deepforest import predict, utilities
 from deepforest.datasets import prediction, training
 from deepforest.metrics import RecallPrecision
-from deepforest.model import Sam3PolygonModel
+from deepforest.scripts.sam import Sam2PolygonModel
 
 Image.MAX_IMAGE_PIXELS = None
 
@@ -73,7 +73,7 @@ class deepforest(pl.LightningModule):
         self.existing_val_dataloader = existing_val_dataloader
 
         self.model = model
-        self.sam3_polygon_model = None
+        self.sam2_polygon_model = None
         self.original_batch_structure = []
 
         if self.model is None:
@@ -763,38 +763,40 @@ class deepforest(pl.LightningModule):
         image: np.ndarray | None = None,
         path: str | None = None,
         root_dir: str | None = None,
-        text_prompt: str | None = None,
         prompt_mode: str = "auto",
-        model_name: str = "facebook/sam3",
+        model_name: str = "facebook/sam2.1-hiera-small",
         hf_token: str | None = None,
-        score_threshold: float = 0.5,
         mask_threshold: float = 0.5,
-        point_box_size: float = 12.0,
+        iou_threshold: float = 0.5,
+        prompt_batch_size: int = 32,
     ):
-        """Post-process box/point predictions into polygons using SAM3."""
-        if self.sam3_polygon_model is None:
-            self.sam3_polygon_model = Sam3PolygonModel.load_model(
+        """Post-process box/point predictions into polygons using SAM2."""
+        if self.sam2_polygon_model is None:
+            self.sam2_polygon_model = Sam2PolygonModel.load_model(
                 model_name=model_name,
                 hf_token=hf_token,
-                device=self.config.accelerator if self.config.accelerator != "auto" else "auto",
+                device=self.config.accelerator
+                if self.config.accelerator != "auto"
+                else "auto",
             )
-        elif self.sam3_polygon_model.model_name != model_name:
-            self.sam3_polygon_model = Sam3PolygonModel.load_model(
+        elif self.sam2_polygon_model.model_name != model_name:
+            self.sam2_polygon_model = Sam2PolygonModel.load_model(
                 model_name=model_name,
                 hf_token=hf_token,
-                device=self.config.accelerator if self.config.accelerator != "auto" else "auto",
+                device=self.config.accelerator
+                if self.config.accelerator != "auto"
+                else "auto",
             )
 
-        return self.sam3_polygon_model.predict_polygons(
+        return self.sam2_polygon_model.predict_polygons(
             results=results,
             image=image,
             path=path,
             root_dir=root_dir,
-            text_prompt=text_prompt,
             prompt_mode=prompt_mode,
-            score_threshold=score_threshold,
             mask_threshold=mask_threshold,
-            point_box_size=point_box_size,
+            iou_threshold=iou_threshold,
+            prompt_batch_size=prompt_batch_size,
         )
 
     def training_step(self, batch, batch_idx):

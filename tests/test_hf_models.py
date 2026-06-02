@@ -2,7 +2,8 @@ import os
 
 import pytest
 from deepforest import main
-from deepforest.model import CropModel, Sam3PolygonModel
+from deepforest.model import CropModel
+from deepforest.scripts.sam import Sam2PolygonModel
 
 
 BOX_MODELS = [
@@ -52,11 +53,8 @@ def test_load_point_models(repo_id):
         assert getattr(df.model, "label_dict", None) is not None
 
 
-@pytest.mark.skipif(
-    os.environ.get("HF_TOKEN") is None,
-    reason="HF_TOKEN is required to load facebook/sam3",
-)
-def test_load_sam3_model():
-    sam = Sam3PolygonModel.load_model(hf_token=os.environ["HF_TOKEN"])
+@pytest.mark.slow
+def test_load_sam2_model():
+    sam = Sam2PolygonModel.load_model()
     assert sam.model is not None
     assert sam.processor is not None

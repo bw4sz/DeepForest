@@ -7,8 +7,8 @@ import pandas as pd
 import pytest
 
 from deepforest import get_data
-from deepforest.model import Sam3PolygonModel
-from deepforest.scripts.sam import sam3_polygons
+from deepforest.scripts.sam import Sam2PolygonModel
+from deepforest.scripts.sam import sam2_polygons
 from deepforest.utilities import load_config
 from deepforest.scripts.predict import predict
 
@@ -134,7 +134,7 @@ def test_cli_predict_subcommand(tmp_path):
     assert output_path.exists()
 
 
-def test_sam3_polygons_script_writes_output(tmp_path, monkeypatch):
+def test_sam2_polygons_script_writes_output(tmp_path, monkeypatch):
     class _FakeSam:
         def predict_polygons(self, results, **kwargs):
             _ = kwargs
@@ -143,14 +143,14 @@ def test_sam3_polygons_script_writes_output(tmp_path, monkeypatch):
             return output
 
     monkeypatch.setattr(
-        Sam3PolygonModel,
+        Sam2PolygonModel,
         "load_model",
         classmethod(lambda cls, **kwargs: _FakeSam()),
     )
 
-    output_path = tmp_path / "sam3_polygons.csv"
+    output_path = tmp_path / "sam2_polygons.csv"
     config = load_config()
-    sam3_polygons(
+    sam2_polygons(
         config=config,
         input_path=get_data("OSBS_029.png"),
         output_path=str(output_path),
@@ -164,24 +164,19 @@ def test_sam3_polygons_script_writes_output(tmp_path, monkeypatch):
     assert "geometry" in df.columns
 
 
-@pytest.mark.skipif(
-    os.environ.get("HF_TOKEN") is None,
-    reason="HF_TOKEN is required to run the SAM3 CLI integration test",
-)
-def test_cli_sam3_polygons_subcommand(tmp_path):
+@pytest.mark.slow
+def test_cli_sam2_polygons_subcommand(tmp_path):
     image_path = get_data("OSBS_029.png")
-    output_path = tmp_path / "sam3_polygons.csv"
+    output_path = tmp_path / "sam2_polygons.csv"
 
     result = subprocess.run(
         [
             sys.executable,
             SCRIPT,
-            "sam3-polygons",
+            "sam2-polygons",
             image_path,
             "--mode",
             "single",
-            "--hf-token",
-            os.environ["HF_TOKEN"],
             "-o",
             str(output_path),
         ],
