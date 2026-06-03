@@ -18,7 +18,7 @@ from torchmetrics.detection import IntersectionOverUnion, MeanAveragePrecision
 from deepforest import predict, utilities
 from deepforest.datasets import prediction, training
 from deepforest.metrics import RecallPrecision
-from deepforest.scripts.sam import Sam2PolygonModel
+from deepforest.scripts.sam import DEFAULT_MAX_POINT_PROMPTS, Sam2PolygonModel
 
 Image.MAX_IMAGE_PIXELS = None
 
@@ -769,6 +769,8 @@ class deepforest(pl.LightningModule):
         mask_threshold: float = 0.5,
         iou_threshold: float = 0.5,
         prompt_batch_size: int = 32,
+        use_negative_point_prompts: bool = True,
+        max_point_prompts: int = DEFAULT_MAX_POINT_PROMPTS,
     ):
         """Post-process box/point predictions into polygons using SAM2."""
         if self.sam2_polygon_model is None:
@@ -797,6 +799,8 @@ class deepforest(pl.LightningModule):
             mask_threshold=mask_threshold,
             iou_threshold=iou_threshold,
             prompt_batch_size=prompt_batch_size,
+            use_negative_point_prompts=use_negative_point_prompts,
+            max_point_prompts=max_point_prompts,
         )
 
     def training_step(self, batch, batch_idx):

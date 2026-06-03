@@ -29,6 +29,9 @@ from deepforest.visualize import plot_results
 
 logger = logging.getLogger(__name__)
 
+# SAM2 mask quality degrades when too many point prompts are passed at once.
+DEFAULT_MAX_POINT_PROMPTS = 12
+
 
 def resolve_device(device: str | None) -> str:
     """Resolve device string for SAM2 inference."""
@@ -64,9 +67,7 @@ def load_sam2_model(
     return model, processor
 
 
-def _point_prompts_from_detections(
-    detections: pd.DataFrame,
-) -> tuple[list[list[list[float]]], list[list[int]]]:
+def _point_coordinates_from_detections(detections: pd.DataFrame) -> np.ndarray:
     if "x" in detections.columns and "y" in detections.columns:
         x = detections["x"].astype(float).to_numpy()
         y = detections["y"].astype(float).to_numpy()
@@ -76,37 +77,103 @@ def _point_prompts_from_detections(
     else:
         raise ValueError("Point prompts require x/y columns or point geometry.")
 
-    points = [[[float(xi), float(yi)]] for xi, yi in zip(x, y, strict=True)]
-    labels = [[1] for _ in points]
-    return points, labels
+    return np.column_stack([x, y])
 
 
-def _process_prompt_chunk(
+def _negative_point_indices(
+    coordinates: np.ndarray,
+    focal_idx: int,
+    *,
+    max_point_prompts: int,
+) -> list[int]:
+    """Select other detections to use as negative point prompts for one focal
+    tree."""
+    other_indices = [idx for idx in range(len(coordinates)) if idx != focal_idx]
+    max_negative = max_point_prompts - 1
+    if max_negative <= 0 or len(other_indices) <= max_negative:
+        return other_indices
+
+    focal = coordinates[focal_idx]
+    distances = np.sum((coordinates[other_indices] - focal) ** 2, axis=1)
+    nearest_order = np.argsort(distances)
+    return [other_indices[idx] for idx in nearest_order[:max_negative]]
+
+
+def _build_focal_point_prompts(
+    coordinates: np.ndarray,
+    focal_indices: list[int],
+    *,
+    use_negative_point_prompts: bool,
+    max_point_prompts: int = DEFAULT_MAX_POINT_PROMPTS,
+) -> tuple[list[list[list[list[float]]]], list[list[list[int]]]]:
+    """Build SAM2 point prompts for one or more focal detections."""
+    objects: list[list[list[float]]] = []
+    labels: list[list[int]] = []
+
+    for focal_idx in focal_indices:
+        if use_negative_point_prompts and len(coordinates) > 1:
+            object_points = [
+                [float(coordinates[focal_idx][0]), float(coordinates[focal_idx][1])]
+            ]
+            object_labels = [1]
+            for other_idx in _negative_point_indices(
+                coordinates,
+                focal_idx,
+                max_point_prompts=max_point_prompts,
+            ):
+                object_points.append(
+                    [float(coordinates[other_idx][0]), float(coordinates[other_idx][1])]
+                )
+                object_labels.append(0)
+        else:
+            object_points = [
+                [float(coordinates[focal_idx][0]), float(coordinates[focal_idx][1])]
+            ]
+            object_labels = [1]
+
+        objects.append(object_points)
+        labels.append(object_labels)
+
+    return [objects], [labels]
+
+
+def _mask_to_polygon_result(
+    mask,
+    mask_threshold: float,
+    iou_threshold: float,
+    best_iou: float,
+) -> tuple[Polygon, float]:
+    if best_iou < iou_threshold:
+        return Polygon(), best_iou
+
+    mask_np = mask.numpy() if hasattr(mask, "numpy") else np.asarray(mask)
+    if isinstance(mask_np, torch.Tensor):
+        mask_np = mask_np.cpu().numpy()
+    mask_uint8 = (mask_np > mask_threshold).astype(np.uint8)
+    return mask_to_polygon(mask_uint8), best_iou
+
+
+def _run_sam2_prompt_batch(
     image: Image.Image,
-    detections: pd.DataFrame,
     model: Sam2Model,
     processor: Sam2Processor,
     device: str,
-    prompt_mode: str,
+    *,
+    input_boxes: list[list[float]] | None = None,
+    input_points: list[list[list[list[float]]]] | None = None,
+    input_labels: list[list[list[int]]] | None = None,
     mask_threshold: float,
     iou_threshold: float,
+    num_objects: int,
 ) -> list[tuple[Polygon, float]]:
-    """Run SAM2 on a batch of box or point prompts for one image."""
-    if prompt_mode == "box":
-        boxes = detections[["xmin", "ymin", "xmax", "ymax"]].astype(float).values.tolist()
-        inputs = processor(images=image, input_boxes=[boxes], return_tensors="pt").to(
-            device
-        )
-    elif prompt_mode == "point":
-        points, labels = _point_prompts_from_detections(detections)
-        inputs = processor(
-            images=image,
-            input_points=[points],
-            input_labels=[labels],
-            return_tensors="pt",
-        ).to(device)
+    processor_kwargs = {"images": image, "return_tensors": "pt"}
+    if input_boxes is not None:
+        processor_kwargs["input_boxes"] = [input_boxes]
     else:
-        raise ValueError(f"prompt_mode must be 'box' or 'point', got '{prompt_mode}'")
+        processor_kwargs["input_points"] = input_points
+        processor_kwargs["input_labels"] = input_labels
+
+    inputs = processor(**processor_kwargs).to(device)
 
     with torch.no_grad():
         outputs = model(**inputs)
@@ -121,24 +188,87 @@ def _process_prompt_chunk(
 
     results: list[tuple[Polygon, float]] = []
     for idx, mask_set in enumerate(masks):
-        if idx >= len(detections):
+        if idx >= num_objects:
             break
         best_idx = iou_scores[0, idx].argmax().item()
         best_iou = iou_scores[0, idx, best_idx].item()
-
-        if best_iou < iou_threshold:
-            results.append((Polygon(), best_iou))
-            continue
-
-        best_mask = mask_set[best_idx]
-        mask_np = best_mask.numpy()
-        if isinstance(mask_np, torch.Tensor):
-            mask_np = mask_np.cpu().numpy()
-        mask_uint8 = (mask_np > mask_threshold).astype(np.uint8)
-        polygon = mask_to_polygon(mask_uint8)
-        results.append((polygon, best_iou))
+        polygon, score = _mask_to_polygon_result(
+            mask_set[best_idx],
+            mask_threshold=mask_threshold,
+            iou_threshold=iou_threshold,
+            best_iou=best_iou,
+        )
+        results.append((polygon, score))
 
     return results
+
+
+def _process_box_prompt_chunk(
+    image: Image.Image,
+    detections: pd.DataFrame,
+    model: Sam2Model,
+    processor: Sam2Processor,
+    device: str,
+    mask_threshold: float,
+    iou_threshold: float,
+) -> list[tuple[Polygon, float]]:
+    """Run SAM2 on a batch of box prompts for one image."""
+    boxes = detections[["xmin", "ymin", "xmax", "ymax"]].astype(float).values.tolist()
+    return _run_sam2_prompt_batch(
+        image=image,
+        model=model,
+        processor=processor,
+        device=device,
+        input_boxes=boxes,
+        mask_threshold=mask_threshold,
+        iou_threshold=iou_threshold,
+        num_objects=len(detections),
+    )
+
+
+def _process_point_prompts(
+    image: Image.Image,
+    detections: pd.DataFrame,
+    model: Sam2Model,
+    processor: Sam2Processor,
+    device: str,
+    prompt_batch_size: int,
+    mask_threshold: float,
+    iou_threshold: float,
+    use_negative_point_prompts: bool,
+    max_point_prompts: int = DEFAULT_MAX_POINT_PROMPTS,
+) -> list[tuple[Polygon, float]]:
+    """Run SAM2 for each point detection, optionally with other points as
+    negatives."""
+    coordinates = _point_coordinates_from_detections(detections)
+    if len(coordinates) == 0:
+        return []
+
+    all_results: list[tuple[Polygon, float]] = []
+    for start in range(0, len(coordinates), prompt_batch_size):
+        focal_indices = list(
+            range(start, min(start + prompt_batch_size, len(coordinates)))
+        )
+        input_points, input_labels = _build_focal_point_prompts(
+            coordinates,
+            focal_indices,
+            use_negative_point_prompts=use_negative_point_prompts,
+            max_point_prompts=max_point_prompts,
+        )
+        batch_results = _run_sam2_prompt_batch(
+            image=image,
+            model=model,
+            processor=processor,
+            device=device,
+            input_points=input_points,
+            input_labels=input_labels,
+            mask_threshold=mask_threshold,
+            iou_threshold=iou_threshold,
+            num_objects=len(focal_indices),
+        )
+        all_results.extend(batch_results)
+
+    return all_results
 
 
 def process_image_group(
@@ -152,6 +282,8 @@ def process_image_group(
     prompt_mode: str = "box",
     mask_threshold: float = 0.5,
     iou_threshold: float = 0.5,
+    use_negative_point_prompts: bool = True,
+    max_point_prompts: int = DEFAULT_MAX_POINT_PROMPTS,
     viz_output_dir: str | None = None,
 ) -> list[str]:
     """Process all detections for a single image.
@@ -167,6 +299,8 @@ def process_image_group(
         prompt_mode: ``box`` or ``point`` prompts
         mask_threshold: Threshold for binarizing SAM2 mask outputs
         iou_threshold: Minimum IoU score to accept a polygon
+        use_negative_point_prompts: For point mode, mark other detections as negative prompts
+        max_point_prompts: Maximum SAM2 point prompts per focal tree (including the positive)
         viz_output_dir: Directory to save visualizations (if not None)
 
     Returns:
@@ -181,20 +315,34 @@ def process_image_group(
         if missing:
             raise ValueError(f"Missing box columns for SAM2 prompts: {sorted(missing)}")
     else:
-        _point_prompts_from_detections(detections)
+        _point_coordinates_from_detections(detections)
 
     all_polygons: list[str] = []
-    for start in range(0, len(detections), box_batch_size):
-        chunk = detections.iloc[start : start + box_batch_size]
-        chunk_results = _process_prompt_chunk(
+    if prompt_mode == "box":
+        for start in range(0, len(detections), box_batch_size):
+            chunk = detections.iloc[start : start + box_batch_size]
+            chunk_results = _process_box_prompt_chunk(
+                image=image,
+                detections=chunk,
+                model=model,
+                processor=processor,
+                device=device,
+                mask_threshold=mask_threshold,
+                iou_threshold=iou_threshold,
+            )
+            all_polygons.extend(polygon.wkt for polygon, _ in chunk_results)
+    else:
+        chunk_results = _process_point_prompts(
             image=image,
-            detections=chunk,
+            detections=detections,
             model=model,
             processor=processor,
             device=device,
-            prompt_mode=prompt_mode,
+            prompt_batch_size=box_batch_size,
             mask_threshold=mask_threshold,
             iou_threshold=iou_threshold,
+            use_negative_point_prompts=use_negative_point_prompts,
+            max_point_prompts=max_point_prompts,
         )
         all_polygons.extend(polygon.wkt for polygon, _ in chunk_results)
 
@@ -242,6 +390,8 @@ def process_detections_dataframe(
     prompt_batch_size: int = 32,
     mask_threshold: float = 0.5,
     iou_threshold: float = 0.5,
+    use_negative_point_prompts: bool = True,
+    max_point_prompts: int = DEFAULT_MAX_POINT_PROMPTS,
 ) -> pd.DataFrame:
     """Convert detections for one image into polygon rows."""
     if prompt_mode == "box":
@@ -250,28 +400,48 @@ def process_detections_dataframe(
         if missing:
             raise ValueError(f"Missing box columns for SAM2 prompts: {sorted(missing)}")
     else:
-        _point_prompts_from_detections(detections)
+        _point_coordinates_from_detections(detections)
 
     if len(detections) == 0:
         return detections.iloc[0:0].copy()
 
     rows = []
-    for start in range(0, len(detections), prompt_batch_size):
-        chunk = detections.iloc[start : start + prompt_batch_size]
-        chunk_results = _process_prompt_chunk(
+    if prompt_mode == "box":
+        for start in range(0, len(detections), prompt_batch_size):
+            chunk = detections.iloc[start : start + prompt_batch_size]
+            chunk_results = _process_box_prompt_chunk(
+                image=image,
+                detections=chunk,
+                model=model,
+                processor=processor,
+                device=device,
+                mask_threshold=mask_threshold,
+                iou_threshold=iou_threshold,
+            )
+            for idx, (polygon, best_iou) in enumerate(chunk_results):
+                if polygon.is_empty:
+                    continue
+                row = chunk.iloc[idx].to_dict()
+                row["geometry"] = polygon
+                row["score"] = best_iou
+                rows.append(row)
+    else:
+        point_results = _process_point_prompts(
             image=image,
-            detections=chunk,
+            detections=detections,
             model=model,
             processor=processor,
             device=device,
-            prompt_mode=prompt_mode,
+            prompt_batch_size=prompt_batch_size,
             mask_threshold=mask_threshold,
             iou_threshold=iou_threshold,
+            use_negative_point_prompts=use_negative_point_prompts,
+            max_point_prompts=max_point_prompts,
         )
-        for idx, (polygon, best_iou) in enumerate(chunk_results):
+        for idx, (polygon, best_iou) in enumerate(point_results):
             if polygon.is_empty:
                 continue
-            row = chunk.iloc[idx].to_dict()
+            row = detections.iloc[idx].to_dict()
             row["geometry"] = polygon
             row["score"] = best_iou
             rows.append(row)
@@ -431,6 +601,8 @@ class Sam2PolygonModel:
         mask_threshold: float = 0.5,
         iou_threshold: float = 0.5,
         prompt_batch_size: int = 32,
+        use_negative_point_prompts: bool = True,
+        max_point_prompts: int = DEFAULT_MAX_POINT_PROMPTS,
     ):
         """Convert DeepForest box/point predictions into polygon
         predictions."""
@@ -459,6 +631,8 @@ class Sam2PolygonModel:
                 prompt_batch_size=prompt_batch_size,
                 mask_threshold=mask_threshold,
                 iou_threshold=iou_threshold,
+                use_negative_point_prompts=use_negative_point_prompts,
+                max_point_prompts=max_point_prompts,
             )
             gdf = utilities.__pandas_to_geodataframe__(polygon_df)
             gdf.root_dir = os.path.dirname(path)
@@ -476,6 +650,8 @@ class Sam2PolygonModel:
                 prompt_batch_size=prompt_batch_size,
                 mask_threshold=mask_threshold,
                 iou_threshold=iou_threshold,
+                use_negative_point_prompts=use_negative_point_prompts,
+                max_point_prompts=max_point_prompts,
             )
             gdf = utilities.__pandas_to_geodataframe__(polygon_df)
             gdf.root_dir = None
@@ -507,6 +683,8 @@ class Sam2PolygonModel:
                     prompt_batch_size=prompt_batch_size,
                     mask_threshold=mask_threshold,
                     iou_threshold=iou_threshold,
+                    use_negative_point_prompts=use_negative_point_prompts,
+                    max_point_prompts=max_point_prompts,
                 )
             )
 
@@ -532,6 +710,8 @@ def sam2_polygons(
     mask_threshold: float = 0.5,
     iou_threshold: float = 0.5,
     prompt_batch_size: int = 32,
+    use_negative_point_prompts: bool = True,
+    max_point_prompts: int = DEFAULT_MAX_POINT_PROMPTS,
 ):
     """Convert DeepForest point/box predictions to polygons with SAM2."""
     from deepforest.main import deepforest as deepforest_model
@@ -583,6 +763,8 @@ def sam2_polygons(
         mask_threshold=mask_threshold,
         iou_threshold=iou_threshold,
         prompt_batch_size=prompt_batch_size,
+        use_negative_point_prompts=use_negative_point_prompts,
+        max_point_prompts=max_point_prompts,
     )
 
     if output_path is not None:

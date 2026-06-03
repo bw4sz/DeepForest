@@ -18,6 +18,7 @@ from deepforest import get_data, utilities
 from deepforest.main import deepforest
 from deepforest.scripts.sam import (
     Sam2PolygonModel,
+    _build_focal_point_prompts,
     convert_boxes_to_polygons,
     load_sam2_model,
     process_image_group,
@@ -61,7 +62,7 @@ class _FakeSam2Processor:
         elif input_points is not None:
             _FakeSam2Processor._prompt_mode = "point"
             _FakeSam2Processor._cached_prompts = [
-                (point_group[0][0], point_group[0][1]) for point_group in input_points[0]
+                (obj_points[0][0], obj_points[0][1]) for obj_points in input_points[0]
             ]
         else:
             raise ValueError("Fake processor expects input_boxes or input_points")
@@ -297,6 +298,46 @@ def test_sam_cli_end_to_end(tmp_path):
     assert viz_dir.exists()
     viz_files = list(viz_dir.glob("*.png"))
     assert len(viz_files) > 0, "No visualization files were created"
+
+
+def test_negative_point_indices_use_all_when_small():
+    coordinates = np.array([[0.0, 0.0], [10.0, 0.0], [0.0, 10.0]])
+    from deepforest.scripts.sam import _negative_point_indices
+
+    negatives = _negative_point_indices(coordinates, focal_idx=0, max_point_prompts=12)
+    assert negatives == [1, 2]
+
+
+def test_negative_point_indices_use_nearest_when_large():
+    coordinates = np.array([[0.0, 0.0], [1.0, 0.0], [100.0, 0.0], [0.0, 100.0]])
+    from deepforest.scripts.sam import _negative_point_indices
+
+    negatives = _negative_point_indices(coordinates, focal_idx=0, max_point_prompts=3)
+    assert negatives == [1, 2]
+
+
+def test_build_focal_point_prompts_uses_negative_labels():
+    coordinates = np.array([[10.0, 20.0], [30.0, 40.0], [50.0, 60.0]])
+    points, labels = _build_focal_point_prompts(
+        coordinates,
+        focal_indices=[1],
+        use_negative_point_prompts=True,
+    )
+
+    assert points == [[[[30.0, 40.0], [10.0, 20.0], [50.0, 60.0]]]]
+    assert labels == [[[1, 0, 0]]]
+
+
+def test_build_focal_point_prompts_positive_only():
+    coordinates = np.array([[10.0, 20.0], [30.0, 40.0]])
+    points, labels = _build_focal_point_prompts(
+        coordinates,
+        focal_indices=[0, 1],
+        use_negative_point_prompts=False,
+    )
+
+    assert points == [[[[10.0, 20.0]], [[30.0, 40.0]]]]
+    assert labels == [[[1], [1]]]
 
 
 def test_load_sam2_model_with_mock(fake_sam2):

@@ -7,7 +7,7 @@ from omegaconf import OmegaConf
 from deepforest.conf.schema import Config as StructuredConfig
 from deepforest.scripts.evaluate import evaluate
 from deepforest.scripts.predict import predict
-from deepforest.scripts.sam import sam2_polygons
+from deepforest.scripts.sam import DEFAULT_MAX_POINT_PROMPTS, sam2_polygons
 from deepforest.scripts.train import train
 
 
@@ -143,7 +143,22 @@ def main():
         "--prompt-batch-size",
         type=int,
         default=32,
-        help="Maximum prompts per SAM2 forward pass",
+        help="Maximum focal detections per SAM2 forward pass (point mode batches focals, not negatives)",
+    )
+    sam_parser.add_argument(
+        "--no-negative-point-prompts",
+        action="store_true",
+        help="Use only positive point prompts instead of positive focal + negative other points",
+    )
+    sam_parser.add_argument(
+        "--max-point-prompts",
+        type=int,
+        default=DEFAULT_MAX_POINT_PROMPTS,
+        help=(
+            "Maximum SAM2 point prompts per focal tree, including the positive point "
+            f"(default: {DEFAULT_MAX_POINT_PROMPTS}). When there are more detections, "
+            "nearest neighbors are used as negative prompts."
+        ),
     )
 
     # Evaluate subcommand
@@ -212,6 +227,8 @@ def main():
             mask_threshold=args.mask_threshold,
             iou_threshold=args.iou_threshold,
             prompt_batch_size=args.prompt_batch_size,
+            use_negative_point_prompts=not args.no_negative_point_prompts,
+            max_point_prompts=args.max_point_prompts,
         )
     elif args.command == "train":
         res = train(

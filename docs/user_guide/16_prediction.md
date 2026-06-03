@@ -126,6 +126,8 @@ We encourage users to experiment with various patch sizes. For 0.1m data, 400-80
 
 DeepForest predictions from `predict_image` or `predict_tile` can be post-processed into polygons with SAM2. This workflow was originally contributed by Josh Veitch-Michaelis in [PR #1158](https://github.com/weecology/DeepForest/pull/1158) for [issue #460](https://github.com/weecology/DeepForest/issues/460). It is useful when you have point or box labels for training but want polygon outputs for downstream analysis. Each detection is segmented independently using box or point prompts; see the [SAM2 paper](https://arxiv.org/abs/2408.00714) and [model card](https://huggingface.co/facebook/sam2.1-hiera-small) for details.
 
+For **point** predictions, SAM2 uses one positive prompt on the focal tree and **negative prompts on other detections in the same image**. When every other tree fits within the SAM2 point budget (default 12 prompts per tree, including the positive), all are used; in denser stands, the nearest neighbors are selected as negatives. Box prompts are unchanged (one box per detection, batched up to 32 per forward pass).
+
 ```python
 from deepforest import main, get_data
 
