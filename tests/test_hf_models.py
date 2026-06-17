@@ -1,6 +1,9 @@
+import os
+
 import pytest
 from deepforest import main
 from deepforest.model import CropModel
+from deepforest.scripts.sam import Sam2PolygonModel
 
 
 BOX_MODELS = [
@@ -48,3 +51,10 @@ def test_load_point_models(repo_id):
         assert df.model is not None
         # detection models should have label_dict on the underlying model
         assert getattr(df.model, "label_dict", None) is not None
+
+
+@pytest.mark.slow
+def test_load_sam2_model():
+    sam = Sam2PolygonModel.load_model()
+    assert sam.model is not None
+    assert sam.processor is not None

@@ -7,6 +7,8 @@ import pandas as pd
 import pytest
 
 from deepforest import get_data
+from deepforest.scripts.sam import Sam2PolygonModel
+from deepforest.scripts.sam import sam2_polygons
 from deepforest.utilities import load_config
 from deepforest.scripts.predict import predict
 
@@ -130,3 +132,60 @@ def test_cli_predict_subcommand(tmp_path):
 
     assert result.returncode == 0
     assert output_path.exists()
+
+
+def test_sam2_polygons_script_writes_output(tmp_path, monkeypatch):
+    class _FakeSam:
+        def predict_polygons(self, results, **kwargs):
+            _ = kwargs
+            output = results.copy()
+            output["geometry"] = output["geometry"].buffer(-0.1)
+            return output
+
+    monkeypatch.setattr(
+        Sam2PolygonModel,
+        "load_model",
+        classmethod(lambda cls, **kwargs: _FakeSam()),
+    )
+
+    output_path = tmp_path / "sam2_polygons.csv"
+    config = load_config()
+    sam2_polygons(
+        config=config,
+        input_path=get_data("OSBS_029.png"),
+        output_path=str(output_path),
+        mode="single",
+        prompt_mode="auto",
+    )
+
+    assert output_path.exists()
+    df = pd.read_csv(output_path)
+    assert not df.empty
+    assert "geometry" in df.columns
+
+
+@pytest.mark.slow
+def test_cli_sam2_polygons_subcommand(tmp_path):
+    image_path = get_data("OSBS_029.png")
+    output_path = tmp_path / "sam2_polygons.csv"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            SCRIPT,
+            "sam2-polygons",
+            image_path,
+            "--mode",
+            "single",
+            "-o",
+            str(output_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert result.returncode == 0
+    assert output_path.exists()
+    df = pd.read_csv(output_path)
+    assert not df.empty

@@ -18,6 +18,7 @@ from torchmetrics.detection import IntersectionOverUnion, MeanAveragePrecision
 from deepforest import predict, utilities
 from deepforest.datasets import prediction, training
 from deepforest.metrics import RecallPrecision
+from deepforest.scripts.sam import DEFAULT_MAX_POINT_PROMPTS, Sam2PolygonModel
 
 Image.MAX_IMAGE_PIXELS = None
 
@@ -72,6 +73,7 @@ class deepforest(pl.LightningModule):
         self.existing_val_dataloader = existing_val_dataloader
 
         self.model = model
+        self.sam2_polygon_model = None
         self.original_batch_structure = []
 
         if self.model is None:
@@ -754,6 +756,52 @@ class deepforest(pl.LightningModule):
         formatted_results.root_dir = root_dir
 
         return formatted_results
+
+    def predict_polygons(
+        self,
+        results,
+        image: np.ndarray | None = None,
+        path: str | None = None,
+        root_dir: str | None = None,
+        prompt_mode: str = "auto",
+        model_name: str = "facebook/sam2.1-hiera-small",
+        hf_token: str | None = None,
+        mask_threshold: float = 0.5,
+        iou_threshold: float = 0.5,
+        prompt_batch_size: int = 32,
+        use_negative_point_prompts: bool = True,
+        max_point_prompts: int = DEFAULT_MAX_POINT_PROMPTS,
+    ):
+        """Post-process box/point predictions into polygons using SAM2."""
+        if self.sam2_polygon_model is None:
+            self.sam2_polygon_model = Sam2PolygonModel.load_model(
+                model_name=model_name,
+                hf_token=hf_token,
+                device=self.config.accelerator
+                if self.config.accelerator != "auto"
+                else "auto",
+            )
+        elif self.sam2_polygon_model.model_name != model_name:
+            self.sam2_polygon_model = Sam2PolygonModel.load_model(
+                model_name=model_name,
+                hf_token=hf_token,
+                device=self.config.accelerator
+                if self.config.accelerator != "auto"
+                else "auto",
+            )
+
+        return self.sam2_polygon_model.predict_polygons(
+            results=results,
+            image=image,
+            path=path,
+            root_dir=root_dir,
+            prompt_mode=prompt_mode,
+            mask_threshold=mask_threshold,
+            iou_threshold=iou_threshold,
+            prompt_batch_size=prompt_batch_size,
+            use_negative_point_prompts=use_negative_point_prompts,
+            max_point_prompts=max_point_prompts,
+        )
 
     def training_step(self, batch, batch_idx):
         """Train on a loaded dataset."""

@@ -122,6 +122,44 @@ The image shows that the speed of the predict_tile function is related to the st
 The _predict_tile_ function is sensitive to _patch_size_, especially when using the prebuilt model on new data.
 We encourage users to experiment with various patch sizes. For 0.1m data, 400-800px per window is appropriate, but it will depend on the density of tree plots. For coarser resolution tiles, >800px patch sizes have been effective.
 
+## Convert points or boxes to polygons with SAM2
+
+DeepForest predictions from `predict_image` or `predict_tile` can be post-processed into polygons with SAM2. This workflow was originally contributed by Josh Veitch-Michaelis in [PR #1158](https://github.com/weecology/DeepForest/pull/1158) for [issue #460](https://github.com/weecology/DeepForest/issues/460). It is useful when you have point or box labels for training but want polygon outputs for downstream analysis. Each detection is segmented independently using box or point prompts; see the [SAM2 paper](https://arxiv.org/abs/2408.00714) and [model card](https://huggingface.co/facebook/sam2.1-hiera-small) for details.
+
+For **point** predictions, SAM2 uses one positive prompt on the focal tree and **negative prompts on other detections in the same image**. When every other tree fits within the SAM2 point budget (default 12 prompts per tree, including the positive), all are used; in denser stands, the nearest neighbors are selected as negatives. Box prompts are unchanged (one box per detection, batched up to 32 per forward pass).
+
+```python
+from deepforest import main, get_data
+
+model = main.deepforest()
+model.load_model(model_name="weecology/deepforest-tree", revision="main")
+
+# Step 1: run DeepForest detection (boxes or points)
+tile_path = get_data("OSBS_029.tif")
+box_results = model.predict_tile(tile_path, patch_size=300, patch_overlap=0.25)
+
+# Step 2: convert prompts to polygons with SAM2 (one mask per detection)
+polygon_results = model.predict_polygons(
+    results=box_results,
+    path=tile_path,
+    prompt_mode="auto",
+)
+```
+
+Integrated CLI (run detection, then SAM2):
+
+```bash
+deepforest sam2-polygons /path/to/image.tif --mode tile -o sam2_polygons.csv
+```
+
+CSV-only workflow (predictions already saved; from PR #1158):
+
+```bash
+deepforest-sam predictions.csv --image-root /path/to/images -o predictions_polygons.csv --visualize
+```
+
+![](../../www/example_predictions_small.png)
+
 ## Predict a directory of using a csv file using model.predict_file
 
 For a list of images with annotations in a csv file, the `predict_file` function will return a dataframe with the predicted bounding boxes for each image as a single dataframe. This is useful for making predictions on a large number of images that have ground truth annotations.

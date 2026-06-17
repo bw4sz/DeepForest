@@ -7,6 +7,7 @@ from omegaconf import OmegaConf
 from deepforest.conf.schema import Config as StructuredConfig
 from deepforest.scripts.evaluate import evaluate
 from deepforest.scripts.predict import predict
+from deepforest.scripts.sam import DEFAULT_MAX_POINT_PROMPTS, sam2_polygons
 from deepforest.scripts.train import train
 
 
@@ -89,6 +90,77 @@ def main():
         help="Prediction mode: 'single' for single image, 'tile' for tiled image prediction, 'csv' for batch prediction from CSV file. Defaults to 'single'.",
     )
 
+    # SAM2 polygon post-processing subcommand
+    sam_parser = subparsers.add_parser(
+        "sam2-polygons",
+        help="Convert DeepForest box/point predictions to polygons with SAM2",
+        epilog="Any remaining arguments <key>=<value> will be passed to Hydra to override the current config.",
+    )
+    sam_parser.add_argument(
+        "input",
+        nargs="?",
+        help="Path to input image or CSV file (optional when --predictions-csv is provided)",
+    )
+    sam_parser.add_argument(
+        "--predictions-csv",
+        help="Optional CSV of existing DeepForest predictions to convert to polygons",
+    )
+    sam_parser.add_argument("-o", "--output", help="Path to save polygon predictions CSV")
+    sam_parser.add_argument(
+        "--root-dir",
+        help="Root directory containing images for CSV-based workflows",
+    )
+    sam_parser.add_argument(
+        "--mode",
+        choices=["single", "tile", "csv"],
+        default="single",
+        help="Prediction mode used when generating DeepForest prompts from input",
+    )
+    sam_parser.add_argument(
+        "--prompt-mode",
+        choices=["auto", "box", "point"],
+        default="auto",
+        help="Prompt type for SAM2; defaults to inferring from prediction geometry",
+    )
+    sam_parser.add_argument(
+        "--model-name",
+        default="facebook/sam2.1-hiera-small",
+        help="Hugging Face model id for SAM2",
+    )
+    sam_parser.add_argument(
+        "--mask-threshold",
+        type=float,
+        default=0.5,
+        help="Mask threshold for binarizing SAM2 outputs",
+    )
+    sam_parser.add_argument(
+        "--iou-threshold",
+        type=float,
+        default=0.5,
+        help="Minimum SAM2 IoU score to keep a polygon",
+    )
+    sam_parser.add_argument(
+        "--prompt-batch-size",
+        type=int,
+        default=32,
+        help="Maximum focal detections per SAM2 forward pass (point mode batches focals, not negatives)",
+    )
+    sam_parser.add_argument(
+        "--no-negative-point-prompts",
+        action="store_true",
+        help="Use only positive point prompts instead of positive focal + negative other points",
+    )
+    sam_parser.add_argument(
+        "--max-point-prompts",
+        type=int,
+        default=DEFAULT_MAX_POINT_PROMPTS,
+        help=(
+            "Maximum SAM2 point prompts per focal tree, including the positive point "
+            f"(default: {DEFAULT_MAX_POINT_PROMPTS}). When there are more detections, "
+            "nearest neighbors are used as negative prompts."
+        ),
+    )
+
     # Evaluate subcommand
     evaluate_parser = subparsers.add_parser(
         "evaluate",
@@ -141,6 +213,22 @@ def main():
             plot=args.plot,
             root_dir=args.root_dir,
             mode=args.mode,
+        )
+    elif args.command == "sam2-polygons":
+        sam2_polygons(
+            cfg,
+            input_path=args.input,
+            predictions_csv=args.predictions_csv,
+            output_path=args.output,
+            root_dir=args.root_dir,
+            mode=args.mode,
+            prompt_mode=args.prompt_mode,
+            model_name=args.model_name,
+            mask_threshold=args.mask_threshold,
+            iou_threshold=args.iou_threshold,
+            prompt_batch_size=args.prompt_batch_size,
+            use_negative_point_prompts=not args.no_negative_point_prompts,
+            max_point_prompts=args.max_point_prompts,
         )
     elif args.command == "train":
         res = train(

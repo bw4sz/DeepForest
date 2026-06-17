@@ -844,3 +844,13 @@ def test_read_file_column_names():
     assert "image_path" in result.columns
     assert "label" in result.columns
     assert hasattr(result, "root_dir")
+
+
+def test_empty_mask_to_polygon():
+    """Test handling of empty masks."""
+    empty_mask = np.zeros((100, 100), dtype=np.uint8)
+
+    polygon = utilities.mask_to_polygon(empty_mask)
+
+    assert isinstance(polygon, shapely.geometry.Polygon)
+    assert polygon.is_empty

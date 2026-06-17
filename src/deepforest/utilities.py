@@ -2,6 +2,7 @@ import json
 import os
 import warnings
 
+import cv2
 import geopandas as gpd
 import numpy as np
 import pandas as pd
@@ -16,6 +17,31 @@ from tqdm import tqdm
 
 from deepforest import _ROOT
 from deepforest.conf.schema import Config as StructuredConfig
+
+
+def mask_to_polygon(mask: np.ndarray) -> shapely.geometry.Polygon:
+    """Convert a binary mask to a shapely Polygon.
+
+    Args:
+        mask: Binary mask array (H, W)
+
+    Returns:
+        Shapely Polygon representing the mask contour
+    """
+    contours, _ = cv2.findContours(
+        mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+
+    if len(contours) == 0:
+        return shapely.geometry.Polygon()
+
+    largest_contour = max(contours, key=lambda contour: contour.shape[0])
+    coords = largest_contour.squeeze()
+
+    if len(coords.shape) == 1 or coords.shape[0] < 3:
+        return shapely.geometry.Polygon()
+
+    return shapely.geometry.Polygon(coords)
 
 
 def load_config(
